@@ -1,0 +1,51 @@
+--- a/drivers/platform/x86/intel/hid.c	2026-10-13 15:15:38.664295774 +0530
++++ b/drivers/platform/x86/intel/hid.c	2026-10-13 15:15:38.665011808 +0530
+@@ -244,6 +244,7 @@
+ 	struct input_dev *array;
+ 	struct input_dev *switches;
+ 	bool wakeup_mode;
++	bool power_pressed; /* 0xce seen, waiting for 0xcf */
+ };
+ 
+ #define HID_EVENT_FILTER_UUID	"eeec56b3-4442-408f-a792-4edd4d758054"
+@@ -597,8 +598,13 @@
+ 		 * send notifies with the power button event code to this
+ 		 * device object on power button actions while suspended.
+ 		 */
+-		if (event == 0xce)
++		if (event == 0xce) {
++			priv->power_pressed = true;
+ 			goto wakeup;
++		}
++
++		if (event == 0xcf)
++			priv->power_pressed = false;
+ 
+ 		/*
+ 		 * Some devices send (duplicate) tablet-mode events when moved
+@@ -655,6 +661,25 @@
+ 	if (report_tablet_mode_event(priv->switches, event))
+ 		return;
+ 
++	/*
++	 * Some MSI EC firmware only sends the power button press (0xce) once
++	 * the button has been held for a moment, but always sends the release
++	 * (0xcf). Treat a release without a preceding press as a full press.
++	 */
++	if (priv->array && event == 0xce)
++		priv->power_pressed = true;
++
++	if (priv->array && event == 0xcf) {
++		if (!priv->power_pressed) {
++			input_report_key(priv->array, KEY_POWER, 1);
++			input_sync(priv->array);
++			input_report_key(priv->array, KEY_POWER, 0);
++			input_sync(priv->array);
++		}
++		priv->power_pressed = false;
++		return;
++	}
++
+ 	/* 0xC0 is for HID events, other values are for 5 button array */
+ 	if (event != 0xc0) {
+ 		if (!priv->array ||
